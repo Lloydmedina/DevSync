@@ -103,6 +103,21 @@ find_config() {
 
 DEFAULT_CONFIG_NAME=".devsync.conf"
 
+# ---------- path normalization ----------
+normalize_windows_path() {
+    local p="$1"
+    # Convert Windows drive paths (C:\..., V:\..., C:/..., V:/...) to /mnt/c/..., /mnt/v/...
+    if [[ "$p" =~ ^([A-Za-z]):[\\/](.*) ]]; then
+        local drive="${BASH_REMATCH[1]}"
+        local rest="${BASH_REMATCH[2]}"
+        # Replace backslashes with forward slashes
+        rest="${rest//\\//}"
+        echo "/mnt/${drive,,}/${rest}"
+    else
+        echo "$p"
+    fi
+}
+
 # ---------- dependency checks ----------
 check_dependencies() {
     local missing=()
@@ -120,7 +135,8 @@ cmd_init() {
     note "=== devsync setup ==="
     echo ""
 
-    read -rp "Windows source path (e.g. /mnt/c/Users/you/project): " SOURCE
+    read -rp "Windows source path (e.g. /mnt/c/Users/you/project or V:\project): " SOURCE
+    SOURCE="$(normalize_windows_path "$SOURCE")"
     read -rp "WSL destination path (local testing copy): " DEST
 
     if [ "$SOURCE" = "$DEST" ]; then
@@ -353,6 +369,7 @@ framework_excludes() {
 # ---------- sync ----------
 do_sync() {
     load_config
+    SOURCE="$(normalize_windows_path "$SOURCE")"
     local fw
     if ! fw="$(resolve_framework)"; then
         err "Could not auto-detect framework (checked $DEST and $SOURCE)."
@@ -539,6 +556,7 @@ start_yii2() {
 
 start_app() {
     load_config
+    SOURCE="$(normalize_windows_path "$SOURCE")"
     local fw
     if [ -n "$RESOLVED_FW" ]; then
         fw="$RESOLVED_FW"
