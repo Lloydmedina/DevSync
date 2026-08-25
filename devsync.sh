@@ -597,11 +597,18 @@ ensure_localstack() {
     cd "$DEST"
     local aws_port=4566
 
-    # 1. Port already in use — something is already serving AWS mock (localstack, moto, etc.)
+    # 1. Check if something is already serving on the AWS mock port.
+    #    lsof can't always see Docker-bound ports in WSL, so also try curl.
+    local port_in_use=0
     if lsof -ti :"$aws_port" >/dev/null 2>&1; then
-        local proc
-        proc="$(ps -p "$(lsof -ti :"$aws_port" | head -1)" -o comm= 2>/dev/null || echo "unknown")"
-        info "AWS mock already running on port $aws_port ($proc)."
+        port_in_use=1
+    elif curl -s --connect-timeout 2 "http://localhost:$aws_port/_localstack/health" >/dev/null 2>&1; then
+        port_in_use=1
+    elif curl -s --connect-timeout 2 "http://localhost:$aws_port" >/dev/null 2>&1; then
+        port_in_use=1
+    fi
+    if [ $port_in_use -eq 1 ]; then
+        info "AWS mock already running on port $aws_port."
         return
     fi
 
@@ -644,7 +651,7 @@ ensure_localstack() {
     # Wait for it to be ready
     local retries=15
     while [ $retries -gt 0 ]; do
-        if lsof -ti :"$aws_port" >/dev/null 2>&1; then
+        if lsof -ti :"$aws_port" >/dev/null 2>&1 || curl -s --connect-timeout 1 "http://localhost:$aws_port" >/dev/null 2>&1; then
             info "moto_server is ready on port $aws_port (PID: $moto_pid)."
             return
         fi
