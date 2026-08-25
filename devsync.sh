@@ -137,7 +137,9 @@ cmd_init() {
 
     read -rp "Windows source path (e.g. /mnt/c/Users/you/project or V:\project): " SOURCE
     SOURCE="$(normalize_windows_path "$SOURCE")"
-    read -rp "WSL destination path (local testing copy): " DEST
+    DEST="$(pwd)"
+    echo "WSL destination: $DEST (current directory)"
+    echo ""
 
     if [ "$SOURCE" = "$DEST" ]; then
         err "Source and destination cannot be the same path."
