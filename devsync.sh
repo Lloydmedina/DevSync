@@ -293,7 +293,7 @@ load_config() {
     : "${APP_ENTRY:=}"
     : "${DJANGO_MANAGE_PATH:=manage.py}"
     : "${PHP_DOCROOT:=}"
-    EXTRA_EXCLUDES=("${EXTRA_EXCLUDES[@]:-}")
+    EXTRA_EXCLUDES=("${EXTRA_EXCLUDES[@]+${EXTRA_EXCLUDES[@]}}")
     CONFIG_USED="$cfg"
     CONFIG_LOADED=1
 }
@@ -388,7 +388,9 @@ do_sync() {
     mkdir -p "$DEST"
 
     mapfile -t EXCLUDES < <(framework_excludes "$fw")
-    EXCLUDES+=("${EXTRA_EXCLUDES[@]}")
+    if [ ${#EXTRA_EXCLUDES[@]} -gt 0 ]; then
+        EXCLUDES+=("${EXTRA_EXCLUDES[@]}")
+    fi
 
     echo "Source:      $SOURCE"
     echo "Destination: $DEST"
