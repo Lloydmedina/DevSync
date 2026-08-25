@@ -73,6 +73,7 @@ This writes a `.devsync.conf` file into the destination folder. After that, ever
 | `devsync stop` | Kill whatever process is running on the configured port. |
 | `devsync status` | Show whether the configured port is in use, and by which process. |
 | `devsync help` | Show usage information. |
+| `devsync version` | Show the installed version. |
 
 All commands accept `-c <path>` or `--config <path>` to specify a `.devsync.conf` file explicitly instead of relying on the default `./.devsync.conf` lookup.
 
@@ -105,14 +106,14 @@ The `.devsync.conf` file is a plain shell script that gets sourced by devsync. I
 
 devsync uses `rsync --delete` but excludes local-only files so they are never overwritten by the Windows source. The following are always excluded:
 
-- `.git/`, `.github/`, `.env`, `logs/`, `.devsync.conf`
+- `.git/`, `.github/`, `.env`, `logs/`, `.devsync.conf`, `node_modules/`
 
 Framework-specific excludes:
 
 - **FastAPI**: `venv/`, `__pycache__/`, `*.pyc`, `.pytest_cache/`
 - **Django**: `venv/`, `__pycache__/`, `*.pyc`, `.pytest_cache/`, `staticfiles/`, `media/`, `db.sqlite3`
-- **Laravel**: `vendor/`, `node_modules/`, `storage/logs/`, `storage/framework/cache/`, `storage/framework/sessions/`, `storage/framework/views/`, `bootstrap/cache/`
-- **Yii2**: `vendor/`, `node_modules/`, `runtime/`
+- **Laravel**: `vendor/`, `storage/logs/`, `storage/framework/cache/`, `storage/framework/sessions/`, `storage/framework/views/`, `bootstrap/cache/`
+- **Yii2**: `vendor/`, `runtime/`
 
 Additional excludes can be added via `EXTRA_EXCLUDES` in the config file.
 
