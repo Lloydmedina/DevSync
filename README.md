@@ -15,8 +15,9 @@ Both WSL and Docker ultimately run on a Linux kernel. Docker Desktop adds a cont
 - **git** installed inside WSL
 - **lsof** installed inside WSL (used by `devsync stop` and `devsync status`)
 - **Python** installed inside WSL, if using FastAPI or Django
+- **python3-venv** installed inside WSL (`sudo apt install python3-venv`) — auto-installed by devsync if missing
 - **PHP** installed inside WSL, if using Laravel or Yii2
-- For FastAPI: **uvicorn** available in your venv or system Python
+- For FastAPI: **uvicorn** listed in your `requirements.txt` (devsync installs it into the venv automatically)
 - For Django: a `manage.py` in the project root (or a path you configure)
 
 ## Installation
@@ -96,7 +97,7 @@ The `.devsync.conf` file is a plain shell script that gets sourced by devsync. I
 | `DEST` | WSL destination path where files are synced to and the dev server runs. |
 | `FRAMEWORK` | `auto`, `fastapi`, `django`, `laravel`, or `yii2`. When set to `auto`, devsync detects the framework by checking for marker files (`artisan` for Laravel, `yii` for Yii2, `manage.py` for Django, `fastapi` in `requirements.txt` or `pyproject.toml` for FastAPI). |
 | `PORT` | Port the dev server binds to. Default: `8000`. |
-| `VENV_PATH` | Path to a Python virtual environment, relative to `DEST`. Default: `venv`. Set blank to skip venv activation. |
+| `VENV_PATH` | Path to a Python virtual environment, relative to `DEST`. Auto-detected during `init` (`venv/` or `.venv/`). If no venv exists, one is created automatically on first `run`/`run-only` and dependencies are installed from `requirements.txt` or `pyproject.toml`. Set blank to skip venv entirely. |
 | `APP_ENTRY` | FastAPI entry point in `module:app` format, e.g. `app.main:app`. If blank, devsync tries `app.main:app`, `main:app`, then `app:app`. |
 | `DJANGO_MANAGE_PATH` | Path to `manage.py`, relative to `DEST`. Default: `manage.py`. |
 | `PHP_DOCROOT` | Webroot directory for Yii2, relative to `DEST`. If blank, devsync auto-detects `web/` or `public/`. |

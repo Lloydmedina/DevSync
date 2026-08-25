@@ -118,6 +118,36 @@ normalize_windows_path() {
     fi
 }
 
+# ---------- port auto-detection ----------
+detect_port() {
+    local dir="$1"
+    # 1. Check docker-compose*.yml for the app service port mapping
+    local compose_file
+    compose_file="$(find "$dir" -maxdepth 1 -name 'docker-compose*.y*ml' 2>/dev/null | head -1)"
+    if [ -n "$compose_file" ]; then
+        # Look for port mapping like "4000:4000" or "- 4000:4000"
+        local port
+        port="$(grep -oP '"?\d{4,5}:\d{4,5}"?' "$compose_file" 2>/dev/null | head -1 | grep -oP '^\d{4,5}' || true)"
+        if [ -n "$port" ]; then
+            echo "$port"
+            return
+        fi
+    fi
+    # 2. Check .env / .env.example for PORT= or APP_PORT=
+    for envfile in "$dir/.env" "$dir/.env.example" "$dir/env.example"; do
+        if [ -f "$envfile" ]; then
+            local port
+            port="$(grep -oiP '^(APP_)?PORT=\K\d+' "$envfile" 2>/dev/null | head -1 || true)"
+            if [ -n "$port" ]; then
+                echo "$port"
+                return
+            fi
+        fi
+    done
+    # 3. Default
+    echo "8000"
+}
+
 # ---------- dependency checks ----------
 check_dependencies() {
     local missing=()
@@ -191,8 +221,10 @@ cmd_init() {
             ;;
     esac
 
-    read -rp "Port to run the dev server on [8000]: " PORT
-    PORT="${PORT:-8000}"
+    PORT="$(detect_port "$SOURCE")"
+    echo "Detected port: $PORT (from project config)"
+    read -rp "Press Enter to use this, or type a different port: " custom_port
+    PORT="${custom_port:-$PORT}"
 
     VENV_PATH=""
     APP_ENTRY=""
@@ -221,8 +253,15 @@ cmd_init() {
     esac
 
     if [ "$ask_python_settings" = "1" ]; then
-        read -rp "Python venv path relative to DEST [venv] (leave blank to skip): " VENV_PATH
-        VENV_PATH="${VENV_PATH:-venv}"
+        VENV_PATH="venv"
+        if [ -d "$DEST/venv" ]; then
+            echo "Found existing venv at: $DEST/venv"
+        elif [ -d "$DEST/.venv" ]; then
+            VENV_PATH=".venv"
+            echo "Found existing venv at: $DEST/.venv"
+        else
+            echo "No venv found — will create one at: $DEST/venv"
+        fi
     fi
 
     if [ "$ask_fastapi_settings" = "1" ]; then
@@ -472,16 +511,51 @@ cmd_status() {
     fi
 }
 
-# ---------- start: fastapi ----------
-start_fastapi() {
+# ---------- venv management ----------
+ensure_venv() {
     cd "$DEST"
-    if [ -n "$VENV_PATH" ] && [ -f "$VENV_PATH/bin/activate" ]; then
+    if [ -z "$VENV_PATH" ]; then
+        return
+    fi
+    if [ -f "$VENV_PATH/bin/activate" ]; then
         echo "Activating venv: $VENV_PATH"
         # shellcheck disable=SC1091
         source "$VENV_PATH/bin/activate"
-    else
-        warn "No venv found at '$VENV_PATH' — running with system/current Python."
+        return
     fi
+    warn "No venv at '$VENV_PATH' — creating one now..."
+    if ! python3 -m venv "$VENV_PATH" 2>/dev/null; then
+        warn "python3 -m venv failed — 'python3-venv' package may be missing."
+        warn "Attempting to install it automatically..."
+        if ! sudo apt install -y python3-venv 2>/dev/null; then
+            err "Could not install python3-venv. Please run manually:"
+            err "  sudo apt install python3-venv"
+            exit 1
+        fi
+        if ! python3 -m venv "$VENV_PATH" 2>/dev/null; then
+            err "Failed to create venv even after installing python3-venv."
+            err "Check your Python installation: python3 --version"
+            exit 1
+        fi
+    fi
+    # shellcheck disable=SC1091
+    source "$VENV_PATH/bin/activate"
+    pip install --upgrade pip >/dev/null 2>&1 || true
+    if [ -f "requirements.txt" ]; then
+        info "Installing dependencies from requirements.txt..."
+        pip install -r requirements.txt
+    elif [ -f "pyproject.toml" ]; then
+        info "Installing dependencies from pyproject.toml..."
+        pip install -e . 2>/dev/null || pip install .
+    else
+        warn "No requirements.txt or pyproject.toml found — venv is empty."
+        warn "Install your dependencies manually after sync."
+    fi
+}
+
+# ---------- start: fastapi ----------
+start_fastapi() {
+    ensure_venv
 
     local entry="$APP_ENTRY"
     if [ -z "$entry" ]; then
@@ -507,14 +581,7 @@ start_fastapi() {
 
 # ---------- start: django ----------
 start_django() {
-    cd "$DEST"
-    if [ -n "$VENV_PATH" ] && [ -f "$VENV_PATH/bin/activate" ]; then
-        echo "Activating venv: $VENV_PATH"
-        # shellcheck disable=SC1091
-        source "$VENV_PATH/bin/activate"
-    else
-        warn "No venv found at '$VENV_PATH' — running with system/current Python."
-    fi
+    ensure_venv
 
     local manage_path="${DJANGO_MANAGE_PATH:-manage.py}"
     if [ ! -f "$manage_path" ]; then
