@@ -160,6 +160,33 @@ check_dependencies() {
     fi
 }
 
+# ---------- python version check ----------
+check_python_version() {
+    local dir="$1"
+    local dockerfile
+    dockerfile="$(find "$dir" -maxdepth 1 -name 'Dockerfile*' 2>/dev/null | head -1)"
+    if [ -z "$dockerfile" ]; then
+        return
+    fi
+    local required_major required_minor
+    required_major="$(grep -oP '^FROM python:\K(\d+)' "$dockerfile" 2>/dev/null | head -1 || true)"
+    required_minor="$(grep -oP '^FROM python:\d+\.\K(\d+)' "$dockerfile" 2>/dev/null | head -1 || true)"
+    if [ -z "$required_major" ]; then
+        return
+    fi
+    local actual_major actual_minor
+    actual_major="$(python3 -c 'import sys; print(sys.version_info[0])' 2>/dev/null || echo "0")"
+    actual_minor="$(python3 -c 'import sys; print(sys.version_info[1])' 2>/dev/null || echo "0")"
+    if [ "$actual_major" -lt "$required_major" ] 2>/dev/null || \
+       { [ "$actual_major" -eq "$required_major" ] 2>/dev/null && [ -n "$required_minor" ] && [ "$actual_minor" -lt "$required_minor" ] 2>/dev/null; }; then
+        local required_ver="${required_major}"
+        [ -n "$required_minor" ] && required_ver="${required_major}.${required_minor}"
+        local actual_ver="${actual_major}.${actual_minor}"
+        warn "Python version mismatch: project requires ${required_ver}, WSL has ${actual_ver}."
+        warn "Some features may not work. Consider installing Python ${required_ver} in WSL."
+    fi
+}
+
 # ---------- init: interactive setup ----------
 cmd_init() {
     note "=== devsync setup ==="
@@ -389,7 +416,7 @@ resolve_framework() {
 # ---------- excludes per framework ----------
 framework_excludes() {
     local fw="$1"
-    local common=(--exclude=".git/" --exclude=".github/" --exclude=".env" --exclude="logs/" --exclude=".devsync.conf" --exclude="node_modules/")
+    local common=(--exclude=".git/" --exclude=".github/" --exclude=".env" --exclude="logs/" --exclude=".devsync.conf" --exclude="node_modules/" --exclude="localstack/")
     case "$fw" in
         fastapi)
             common+=(--exclude="venv/" --exclude="__pycache__/" --exclude="*.pyc" --exclude=".pytest_cache/")
@@ -457,11 +484,23 @@ do_sync() {
             ;;
         *)
             info "Syncing files..."
-            rsync -avh --delete "${EXCLUDES[@]}" "$SOURCE/" "$DEST/"
+            rsync -avh --delete "${EXCLUDES[@]}" "$SOURCE/" "$DEST/" || {
+                local rc=$?
+                if [ $rc -eq 23 ]; then
+                    warn "Some files could not be deleted (permission denied) — sync completed with warnings."
+                else
+                    err "rsync failed with exit code $rc"
+                    exit 1
+                fi
+            }
             echo ""
             info "=== Sync complete ==="
             ;;
     esac
+
+    if [ "$fw" = "fastapi" ] || [ "$fw" = "django" ]; then
+        check_python_version "$DEST"
+    fi
 }
 
 # ---------- stop / status ----------
@@ -553,9 +592,72 @@ ensure_venv() {
     fi
 }
 
+# ---------- AWS mock management ----------
+ensure_localstack() {
+    cd "$DEST"
+    local aws_port=4566
+
+    # 1. Port already in use — something is already serving AWS mock (localstack, moto, etc.)
+    if lsof -ti :"$aws_port" >/dev/null 2>&1; then
+        local proc
+        proc="$(ps -p "$(lsof -ti :"$aws_port" | head -1)" -o comm= 2>/dev/null || echo "unknown")"
+        info "AWS mock already running on port $aws_port ($proc)."
+        return
+    fi
+
+    # 2. Check if this project uses localstack/moto (looks for localhost:4566 in env files)
+    local uses_aws_mock=0
+    for envfile in ".env" ".env.example"; do
+        if [ -f "$envfile" ] && grep -qi "localhost:4566" "$envfile" 2>/dev/null; then
+            uses_aws_mock=1
+            break
+        fi
+    done
+    if [ $uses_aws_mock -eq 0 ]; then
+        return
+    fi
+
+    # 3. Start moto_server as a lightweight AWS mock (no Docker needed)
+    warn "AWS mock not running on port $aws_port — starting moto_server..."
+
+    # Ensure moto is installed in the venv
+    if ! command -v moto_server >/dev/null 2>&1; then
+        if [ -n "${VIRTUAL_ENV:-}" ]; then
+            info "Installing moto[server] in venv..."
+            pip install "moto[server]" >/dev/null 2>&1 || {
+                warn "Failed to install moto. Install manually: pip install moto[server]"
+                warn "Then run: moto_server -p $aws_port"
+                return
+            }
+        else
+            warn "moto_server not found and no venv active."
+            warn "Install manually: pip install moto[server]"
+            warn "Then run: moto_server -p $aws_port"
+            return
+        fi
+    fi
+
+    # Start moto_server in background
+    moto_server -p "$aws_port" >/dev/null 2>&1 &
+    local moto_pid=$!
+
+    # Wait for it to be ready
+    local retries=15
+    while [ $retries -gt 0 ]; do
+        if lsof -ti :"$aws_port" >/dev/null 2>&1; then
+            info "moto_server is ready on port $aws_port (PID: $moto_pid)."
+            return
+        fi
+        sleep 1
+        retries=$((retries - 1))
+    done
+    warn "moto_server did not become ready in time. Try starting it manually: moto_server -p $aws_port"
+}
+
 # ---------- start: fastapi ----------
 start_fastapi() {
     ensure_venv
+    ensure_localstack
 
     local entry="$APP_ENTRY"
     if [ -z "$entry" ]; then
@@ -582,6 +684,7 @@ start_fastapi() {
 # ---------- start: django ----------
 start_django() {
     ensure_venv
+    ensure_localstack
 
     local manage_path="${DJANGO_MANAGE_PATH:-manage.py}"
     if [ ! -f "$manage_path" ]; then
@@ -670,6 +773,61 @@ cmd_run_only() {
     start_app
 }
 
+# ---------- test ----------
+cmd_test() {
+    load_config
+    SOURCE="$(normalize_windows_path "$SOURCE")"
+    local fw
+    if [ -n "$RESOLVED_FW" ]; then
+        fw="$RESOLVED_FW"
+    else
+        if ! fw="$(resolve_framework)"; then
+            err "Could not auto-detect framework."
+            err "Set FRAMEWORK explicitly in your .devsync.conf."
+            exit 1
+        fi
+        RESOLVED_FW="$fw"
+    fi
+
+    cd "$DEST"
+
+    case "$fw" in
+        fastapi|django)
+            ensure_venv
+            if [ ! -f "pytest.ini" ] && [ ! -f "pyproject.toml" ] && [ ! -f "setup.cfg" ]; then
+                warn "No pytest configuration found (pytest.ini, pyproject.toml, or setup.cfg)."
+            fi
+            if ! python -c 'import pytest' 2>/dev/null; then
+                warn "pytest not installed in venv — installing now..."
+                pip install pytest pytest-asyncio >/dev/null 2>&1 || {
+                    err "Failed to install pytest. Install manually: pip install pytest pytest-asyncio"
+                    exit 1
+                }
+            fi
+            info "Running pytest..."
+            echo ""
+            exec python -m pytest
+            ;;
+        laravel|yii2)
+            if ! command -v phpunit >/dev/null 2>&1 && [ ! -f "vendor/bin/phpunit" ]; then
+                err "phpunit not found. Install dependencies first: composer install"
+                exit 1
+            fi
+            info "Running phpunit..."
+            echo ""
+            if [ -f "vendor/bin/phpunit" ]; then
+                exec vendor/bin/phpunit
+            else
+                exec phpunit
+            fi
+            ;;
+        *)
+            err "Unsupported framework for testing: $fw"
+            exit 1
+            ;;
+    esac
+}
+
 usage() {
     cat <<EOF
 devsync — Windows -> WSL sync + dev server runner (FastAPI / Django / Laravel / Yii2)
@@ -681,6 +839,7 @@ Usage:
   devsync run-only             Start the dev server without syncing
   devsync stop                 Stop whatever is running on the configured port
   devsync status               Show whether the port is in use
+  devsync test                 Run the project's test suite (pytest/phpunit)
   devsync version              Show version
 
 Options:
@@ -696,6 +855,7 @@ case "$CMD" in
     run-only)   check_dependencies; cmd_run_only ;;
     stop)       check_dependencies; cmd_stop ;;
     status)     check_dependencies; cmd_status ;;
+    test)       check_dependencies; cmd_test ;;
     ""|help|-h|--help) usage ;;
     version|--version) echo "devsync $VERSION" ;;
     *)

@@ -2,7 +2,7 @@
 
 devsync is a CLI tool for developers whose laptop or PC is too low-spec to run Docker Desktop comfortably. Docker Desktop consumes significant RAM and CPU even when idle, which is problematic on constrained hardware. devsync avoids this by using WSL (Windows Subsystem for Linux) itself as a lightweight local testing environment. The workflow: keep your git-tracked source code on the Windows side (C: drive, V: drive, wherever you normally work), use devsync to one-way sync that code into a WSL folder, then run the app's real dev server directly in WSL. This gives you a server-like Linux environment for testing without the overhead of virtualized containers.
 
-This tool is aimed at developers on constrained hardware who cannot run Docker Desktop comfortably. It is not a general Docker replacement for everyone.
+This tool is aimed at developers on constrained hardware who cannot run Docker Desktop comfortably. It is not a general Docker replacement for everyone. For projects that depend on AWS services (DynamoDB, S3), devsync can automatically start [moto](https://github.com/getmoto/moto) as a lightweight AWS mock server — no Docker required.
 
 ## Why WSL instead of Docker
 
@@ -13,12 +13,13 @@ Both WSL and Docker ultimately run on a Linux kernel. Docker Desktop adds a cont
 - **WSL2** with a Linux distribution installed (Ubuntu, Debian, etc.)
 - **rsync** installed inside WSL (`sudo apt install rsync` or equivalent)
 - **git** installed inside WSL
-- **lsof** installed inside WSL (used by `devsync stop` and `devsync status`)
+- **lsof** installed inside WSL (used by `devsync stop`, `devsync status`, and AWS mock detection)
 - **Python** installed inside WSL, if using FastAPI or Django
 - **python3-venv** installed inside WSL (`sudo apt install python3-venv`) — auto-installed by devsync if missing
 - **PHP** installed inside WSL, if using Laravel or Yii2
 - For FastAPI: **uvicorn** listed in your `requirements.txt` (devsync installs it into the venv automatically)
 - For Django: a `manage.py` in the project root (or a path you configure)
+- For AWS-dependent projects: **moto** is auto-installed into the venv if your project references `localhost:4566` in `.env` or `.env.example`
 
 ## Installation
 
@@ -50,14 +51,15 @@ cd ~/my-project
 devsync init
 ```
 
-The interactive prompts will ask for:
+The interactive setup will:
 
-- **Windows source path** — e.g. `/mnt/c/Users/you/project` or `/mnt/v/projects/my-project`
-- **WSL destination path** — the local testing copy, e.g. `~/my-project`
-- **Language** — Python, PHP, or "not sure" (auto-detect)
-- **Framework** — narrowed to the chosen language (FastAPI/Django for Python, Laravel/Yii2 for PHP), or auto-detect
-- **Port** — the port the dev server will bind to (default 8000)
-- **Framework-specific settings** — Python venv path, FastAPI entry point (e.g. `app.main:app`), Django `manage.py` path, or PHP webroot
+- **Ask for Windows source path** — e.g. `/mnt/c/Users/you/project` or `V:\project` (Windows paths are auto-converted to `/mnt/v/...`)
+- **Auto-detect WSL destination** — uses the current directory as the destination
+- **Ask for language** — Python, PHP, or "not sure" (auto-detect)
+- **Ask for framework** — narrowed to the chosen language (FastAPI/Django for Python, Laravel/Yii2 for PHP), or auto-detect
+- **Auto-detect port** — scans `docker-compose*.yml` and `.env` files for port mappings (e.g. `4000:4000`). Press Enter to accept or type a different port.
+- **Auto-detect venv** — checks for existing `venv/` or `.venv/` in the destination. If none exists, one is created on first `run`.
+- **Ask for framework-specific settings** — FastAPI entry point (e.g. `app.main:app`), Django `manage.py` path, or PHP webroot
 
 This writes a `.devsync.conf` file into the destination folder. After that, every other command auto-finds `./.devsync.conf` in the current directory, or accepts an explicit path via `-c/--config <path>`.
 
@@ -73,6 +75,7 @@ This writes a `.devsync.conf` file into the destination folder. After that, ever
 | `devsync run-only` | Start the dev server without syncing first. |
 | `devsync stop` | Kill whatever process is running on the configured port. |
 | `devsync status` | Show whether the configured port is in use, and by which process. |
+| `devsync test` | Run the project's test suite in the venv (pytest for Python, phpunit for PHP). |
 | `devsync help` | Show usage information. |
 | `devsync version` | Show the installed version. |
 
@@ -96,7 +99,7 @@ The `.devsync.conf` file is a plain shell script that gets sourced by devsync. I
 | `SOURCE` | Windows-mounted source path, e.g. `/mnt/c/Users/you/project`. This is where your git-tracked code lives. |
 | `DEST` | WSL destination path where files are synced to and the dev server runs. |
 | `FRAMEWORK` | `auto`, `fastapi`, `django`, `laravel`, or `yii2`. When set to `auto`, devsync detects the framework by checking for marker files (`artisan` for Laravel, `yii` for Yii2, `manage.py` for Django, `fastapi` in `requirements.txt` or `pyproject.toml` for FastAPI). |
-| `PORT` | Port the dev server binds to. Default: `8000`. |
+| `PORT` | Port the dev server binds to. Auto-detected from `docker-compose*.yml` or `.env` files during `init`. Default: `8000`. |
 | `VENV_PATH` | Path to a Python virtual environment, relative to `DEST`. Auto-detected during `init` (`venv/` or `.venv/`). If no venv exists, one is created automatically on first `run`/`run-only` and dependencies are installed from `requirements.txt` or `pyproject.toml`. Set blank to skip venv entirely. |
 | `APP_ENTRY` | FastAPI entry point in `module:app` format, e.g. `app.main:app`. If blank, devsync tries `app.main:app`, `main:app`, then `app:app`. |
 | `DJANGO_MANAGE_PATH` | Path to `manage.py`, relative to `DEST`. Default: `manage.py`. |
@@ -107,7 +110,7 @@ The `.devsync.conf` file is a plain shell script that gets sourced by devsync. I
 
 devsync uses `rsync --delete` but excludes local-only files so they are never overwritten by the Windows source. The following are always excluded:
 
-- `.git/`, `.github/`, `.env`, `logs/`, `.devsync.conf`, `node_modules/`
+- `.git/`, `.github/`, `.env`, `logs/`, `.devsync.conf`, `node_modules/`, `localstack/`
 
 Framework-specific excludes:
 
@@ -117,6 +120,28 @@ Framework-specific excludes:
 - **Yii2**: `vendor/`, `runtime/`
 
 Additional excludes can be added via `EXTRA_EXCLUDES` in the config file.
+
+### AWS mock (moto) auto-management
+
+If your project references `localhost:4566` in `.env` or `.env.example` (the standard localstack/moto endpoint), devsync automatically manages an AWS mock server on `devsync run` and `devsync run-only`:
+
+1. **Port 4566 already in use** — devsync detects it and skips (works with localstack, moto, or any other AWS mock already running).
+2. **Port 4566 is free** — devsync installs `moto[server]` into your venv (if not already installed) and starts `moto_server -p 4566` in the background.
+3. **Waits for readiness** — polls port 4566 for up to 15 seconds before starting the dev server.
+
+This means you can develop and test AWS-dependent applications (DynamoDB, S3) without Docker or localstack. Moto runs as a lightweight Python process inside your venv.
+
+If you prefer to use localstack with Docker instead, simply start it manually before `devsync run` — devsync will detect port 4566 in use and skip moto.
+
+### Virtual environment auto-management
+
+For Python projects (FastAPI, Django), devsync automatically manages the virtual environment:
+
+1. **During `init`** — checks for existing `venv/` or `.venv/` in the destination directory and uses it. If neither exists, defaults to `venv/`.
+2. **During `run`/`run-only`** — if the venv doesn't exist yet, creates it with `python3 -m venv`, installs `moto[server]` if needed, then installs dependencies from `requirements.txt` (or `pyproject.toml` as fallback). If `python3-venv` is missing, devsync attempts to install it via `apt`.
+3. **Subsequent runs** — the venv already exists, so it just activates and starts the server.
+
+Set `VENV_PATH` to blank in `.devsync.conf` to skip venv entirely and use system Python.
 
 ## Supported frameworks
 
@@ -204,6 +229,29 @@ Auto-detection checks for the following marker files in the destination folder f
 - `fastapi` in `requirements.txt` or `pyproject.toml` — FastAPI
 
 If detection fails, set `FRAMEWORK` explicitly in `.devsync.conf` to one of `fastapi`, `django`, `laravel`, or `yii2`. You can also re-run `devsync init` and choose the framework manually instead of relying on auto-detect.
+
+### Python version mismatch
+
+After sync, devsync checks the project's `Dockerfile*` for the Python version (e.g. `FROM python:3.13`) and compares it to the WSL Python version. If WSL has an older version, a warning is shown:
+
+```
+Python version mismatch: project requires 3.13, WSL has 3.10.
+Some features may not work. Consider installing Python 3.13 in WSL.
+```
+
+This is a warning only — the sync and server startup proceed regardless. To fix it, install the required Python version in WSL (e.g. `sudo apt install python3.13`).
+
+### rsync permission errors on localstack directory
+
+If you previously ran localstack with Docker, the `localstack/` directory may contain root-owned files that rsync cannot delete. devsync excludes `localstack/` from sync automatically. If you still see errors, remove the directory manually:
+
+```bash
+sudo rm -rf localstack/
+```
+
+### Windows paths not recognized
+
+If you entered a Windows-style path (e.g. `V:\project`) during `devsync init`, it is automatically converted to the WSL equivalent (`/mnt/v/project`). If you hand-edited `.devsync.conf` with a Windows path, devsync normalizes it at runtime. No manual conversion needed.
 
 ## License
 
