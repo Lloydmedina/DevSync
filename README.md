@@ -158,6 +158,20 @@ rm -rf ~/devsync
 
 The installer adds `~/.local/bin` to your `PATH` in your shell rc file, but this does not take effect in your current terminal automatically. Run `source ~/.bashrc` (or `source ~/.zshrc` if using zsh), or simply open a new terminal. Verify with `devsync help`.
 
+Do not run the installer with `sudo`. It installs per-user into `$HOME/.local/bin`. Running with sudo installs into `/root` instead of your user home, making the tool unavailable to your user. If you already did this, clean up the root install:
+
+```bash
+sudo rm -f /root/.local/bin/devsync
+```
+
+Then re-run the installer without sudo:
+
+```bash
+cd ~/devsync
+./install.sh
+source ~/.bashrc
+```
+
 ### Cloning onto `/mnt/c/` is slow
 
 If you cloned the devsync repo into a Windows-mounted path like `/mnt/c/...` or `/mnt/v/...`, file I/O across the WSL/Windows boundary is significantly slower than operating within the native Linux filesystem. The installer will warn you if it detects this. To fix it, re-clone into your Linux home directory:

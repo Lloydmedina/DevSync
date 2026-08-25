@@ -75,6 +75,15 @@ fi
 note "=== devsync installer ==="
 echo ""
 
+if [ "$(id -u)" = "0" ]; then
+    err "This installer should NOT be run as root or with sudo."
+    err "It installs per-user (into \$HOME/.local/bin). Running as root"
+    err "would install into /root instead of your user home."
+    err ""
+    err "Run it without sudo:  ./install.sh"
+    exit 1
+fi
+
 if ! check_wsl; then
     warn "This doesn't look like a WSL environment."
     warn "devsync is built for WSL — if you're on native Linux this may still"
