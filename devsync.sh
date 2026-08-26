@@ -797,6 +797,17 @@ ensure_composer_deps() {
         exit 1
     fi
 
+    # Ensure writable directories that composer's post-autoload-dump scripts
+    # (and Laravel itself) need. These are excluded from sync, so they may
+    # not exist yet on a fresh WSL destination.
+    mkdir -p bootstrap/cache \
+             storage/logs \
+             storage/framework/cache \
+             storage/framework/sessions \
+             storage/framework/views \
+             storage/app/public
+    chmod -R 775 bootstrap/cache storage
+
     # Case 1: vendor/ doesn't exist at all — first install.
     if [ ! -d "vendor" ]; then
         info "vendor/ not found — running composer install..."
