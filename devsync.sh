@@ -144,7 +144,18 @@ detect_port() {
             fi
         fi
     done
-    # 3. Default
+    # 3. Check Dockerfile for EXPOSE
+    local dockerfile
+    dockerfile="$(find "$dir" -maxdepth 1 -name 'Dockerfile*' 2>/dev/null | head -1)"
+    if [ -n "$dockerfile" ]; then
+        local port
+        port="$(grep -oP '^EXPOSE\s+\K\d+' "$dockerfile" 2>/dev/null | head -1 || true)"
+        if [ -n "$port" ]; then
+            echo "$port"
+            return
+        fi
+    fi
+    # 4. Default
     echo "8000"
 }
 
@@ -184,6 +195,42 @@ check_python_version() {
         local actual_ver="${actual_major}.${actual_minor}"
         warn "Python version mismatch: project requires ${required_ver}, WSL has ${actual_ver}."
         warn "Some features may not work. Consider installing Python ${required_ver} in WSL."
+    fi
+}
+
+# ---------- php version check ----------
+check_php_version() {
+    local dir="$1"
+    local composer_json="$dir/composer.json"
+    if [ ! -f "$composer_json" ]; then
+        return
+    fi
+    # Extract the minimum PHP version from the "php" constraint, e.g. "^8.2" -> "8.2"
+    local required_version
+    required_version="$(grep -oP '"php"\s*:\s*"[~^>=]*\K[0-9.]+' "$composer_json" 2>/dev/null | head -1 || true)"
+    if [ -z "$required_version" ]; then
+        return
+    fi
+    if ! command -v php >/dev/null 2>&1; then
+        warn "PHP is not installed in WSL but composer.json requires PHP ${required_version}."
+        warn "Install PHP with: sudo apt install php-cli php-mbstring php-xml php-sqlite3"
+        return
+    fi
+    local required_major required_minor
+    required_major="${required_version%%.*}"
+    local remainder="${required_version#*.}"
+    required_minor="${remainder%%.*}"
+    [ -z "$required_minor" ] && required_minor="0"
+
+    local actual_major actual_minor
+    actual_major="$(php -r 'echo PHP_MAJOR_VERSION;' 2>/dev/null || echo "0")"
+    actual_minor="$(php -r 'echo PHP_MINOR_VERSION;' 2>/dev/null || echo "0")"
+
+    if [ "$actual_major" -lt "$required_major" ] 2>/dev/null || \
+       { [ "$actual_major" -eq "$required_major" ] 2>/dev/null && [ "$actual_minor" -lt "$required_minor" ] 2>/dev/null; }; then
+        local actual_ver="${actual_major}.${actual_minor}"
+        warn "PHP version mismatch: project requires ${required_version}, WSL has ${actual_ver}."
+        warn "Some features may not work. Consider installing PHP ${required_version} in WSL."
     fi
 }
 
@@ -425,7 +472,7 @@ framework_excludes() {
             common+=(--exclude="venv/" --exclude="__pycache__/" --exclude="*.pyc" --exclude=".pytest_cache/" --exclude="staticfiles/" --exclude="media/" --exclude="db.sqlite3")
             ;;
         laravel)
-            common+=(--exclude="vendor/" --exclude="storage/logs/" --exclude="storage/framework/cache/" --exclude="storage/framework/sessions/" --exclude="storage/framework/views/" --exclude="bootstrap/cache/")
+            common+=(--exclude="vendor/" --exclude="storage/logs/" --exclude="storage/framework/cache/" --exclude="storage/framework/sessions/" --exclude="storage/framework/views/" --exclude="bootstrap/cache/" --exclude="database/*.sqlite" --exclude=".phpunit.cache/" --exclude="public/storage/" --exclude="public/build/" --exclude="public/hot" --exclude="storage/pail/" --exclude="storage/*.key")
             ;;
         yii2)
             common+=(--exclude="vendor/" --exclude="runtime/")
@@ -500,6 +547,9 @@ do_sync() {
 
     if [ "$fw" = "fastapi" ] || [ "$fw" = "django" ]; then
         check_python_version "$DEST"
+    fi
+    if [ "$fw" = "laravel" ] || [ "$fw" = "yii2" ]; then
+        check_php_version "$DEST"
     fi
 }
 

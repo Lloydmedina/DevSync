@@ -57,7 +57,7 @@ The interactive setup will:
 - **Auto-detect WSL destination** — uses the current directory as the destination
 - **Ask for language** — Python, PHP, or "not sure" (auto-detect)
 - **Ask for framework** — narrowed to the chosen language (FastAPI/Django for Python, Laravel/Yii2 for PHP), or auto-detect
-- **Auto-detect port** — scans `docker-compose*.yml` and `.env` files for port mappings (e.g. `4000:4000`). Press Enter to accept or type a different port.
+- **Auto-detect port** — scans `docker-compose*.yml`, `.env` files, and `Dockerfile` `EXPOSE` directives for port mappings (e.g. `4000:4000` or `EXPOSE 8000`). Press Enter to accept or type a different port.
 - **Auto-detect venv** — checks for existing `venv/` or `.venv/` in the destination. If none exists, one is created on first `run`.
 - **Ask for framework-specific settings** — FastAPI entry point (e.g. `app.main:app`), Django `manage.py` path, or PHP webroot
 
@@ -99,7 +99,7 @@ The `.devsync.conf` file is a plain shell script that gets sourced by devsync. I
 | `SOURCE` | Windows-mounted source path, e.g. `/mnt/c/Users/you/project`. This is where your git-tracked code lives. |
 | `DEST` | WSL destination path where files are synced to and the dev server runs. |
 | `FRAMEWORK` | `auto`, `fastapi`, `django`, `laravel`, or `yii2`. When set to `auto`, devsync detects the framework by checking for marker files (`artisan` for Laravel, `yii` for Yii2, `manage.py` for Django, `fastapi` in `requirements.txt` or `pyproject.toml` for FastAPI). |
-| `PORT` | Port the dev server binds to. Auto-detected from `docker-compose*.yml` or `.env` files during `init`. Default: `8000`. |
+| `PORT` | Port the dev server binds to. Auto-detected from `docker-compose*.yml`, `.env` files, or `Dockerfile` `EXPOSE` directive during `init`. Default: `8000`. |
 | `VENV_PATH` | Path to a Python virtual environment, relative to `DEST`. Auto-detected during `init` (`venv/` or `.venv/`). If no venv exists, one is created automatically on first `run`/`run-only` and dependencies are installed from `requirements.txt` or `pyproject.toml`. Set blank to skip venv entirely. |
 | `APP_ENTRY` | FastAPI entry point in `module:app` format, e.g. `app.main:app`. If blank, devsync tries `app.main:app`, `main:app`, then `app:app`. |
 | `DJANGO_MANAGE_PATH` | Path to `manage.py`, relative to `DEST`. Default: `manage.py`. |
@@ -116,7 +116,7 @@ Framework-specific excludes:
 
 - **FastAPI**: `venv/`, `__pycache__/`, `*.pyc`, `.pytest_cache/`
 - **Django**: `venv/`, `__pycache__/`, `*.pyc`, `.pytest_cache/`, `staticfiles/`, `media/`, `db.sqlite3`
-- **Laravel**: `vendor/`, `storage/logs/`, `storage/framework/cache/`, `storage/framework/sessions/`, `storage/framework/views/`, `bootstrap/cache/`
+- **Laravel**: `vendor/`, `storage/logs/`, `storage/framework/cache/`, `storage/framework/sessions/`, `storage/framework/views/`, `bootstrap/cache/`, `database/*.sqlite`, `.phpunit.cache/`, `public/storage/`, `public/build/`, `public/hot`, `storage/pail/`, `storage/*.key`
 - **Yii2**: `vendor/`, `runtime/`
 
 Additional excludes can be added via `EXTRA_EXCLUDES` in the config file.
@@ -240,6 +240,17 @@ Some features may not work. Consider installing Python 3.13 in WSL.
 ```
 
 This is a warning only — the sync and server startup proceed regardless. To fix it, install the required Python version in WSL (e.g. `sudo apt install python3.13`).
+
+### PHP version mismatch
+
+After sync, devsync checks the project's `composer.json` for the PHP version constraint (e.g. `"php": "^8.2"`) and compares it to the WSL PHP version. If WSL has an older version, a warning is shown:
+
+```
+PHP version mismatch: project requires 8.2, WSL has 8.1.
+Some features may not work. Consider installing PHP 8.2 in WSL.
+```
+
+This is a warning only — the sync and server startup proceed regardless. To fix it, install the required PHP version in WSL (e.g. `sudo apt install php8.2-cli php8.2-mbstring php8.2-xml php8.2-sqlite3`).
 
 ### rsync permission errors on localstack directory
 
