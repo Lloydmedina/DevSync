@@ -27,7 +27,7 @@ Clone the repository into your WSL filesystem, not a Windows-mounted path. Cloni
 
 ```bash
 git clone <repo-url> ~/devsync
-cd ~/Devsync
+cd ~/DevSync
 chmod +x install.sh
 ./install.sh
 source ~/.bashrc   # or open a new terminal
