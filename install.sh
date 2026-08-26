@@ -8,15 +8,18 @@
 #
 # What it does:
 #   - Confirms you're running inside WSL (warns, doesn't block, if not)
-#   - Symlinks ./devsync.sh -> ~/.local/bin/devsync (so `git pull` later
-#     updates the tool automatically, no reinstall needed)
+#   - Copies devsync.sh into ~/.local/share/devsync/ (a separate data
+#     dir so the git-tracked original is never modified)
+#   - Makes the copy executable (chmod +x on the copy, NOT the original)
+#   - Symlinks ~/.local/bin/devsync -> the copy
+#   - Records the source repo path so 'devsync update' can git pull + reinstall
 #   - Adds ~/.local/bin to PATH in your shell rc file, only if it isn't
 #     already there
 #   - Safe to re-run any time (idempotent)
 #
 # Usage:
-#   ./install.sh            # install
-#   ./install.sh uninstall  # remove the symlink (leaves PATH edits alone)
+#   ./install.sh            # install (or re-install after git pull)
+#   ./install.sh uninstall  # remove the symlink + copied files (leaves PATH alone)
 
 set -euo pipefail
 
@@ -34,6 +37,9 @@ note()  { echo -e "${BLUE}$*${NC}"; }
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SOURCE_SCRIPT="$SCRIPT_DIR/devsync.sh"
 INSTALL_DIR="$HOME/.local/bin"
+DATA_DIR="$HOME/.local/share/devsync"
+COPIED_SCRIPT="$DATA_DIR/devsync.sh"
+REPO_MARKER="$DATA_DIR/.source-repo"
 LINK_PATH="$INSTALL_DIR/devsync"
 
 # ---------- WSL check ----------
@@ -62,6 +68,10 @@ do_uninstall() {
         info "Removed $LINK_PATH"
     else
         warn "Nothing installed at $LINK_PATH — already clean."
+    fi
+    if [ -d "$DATA_DIR" ]; then
+        rm -rf "$DATA_DIR"
+        info "Removed $DATA_DIR"
     fi
     note "PATH entries in your shell rc file were left in place (harmless if unused)."
     exit 0
@@ -109,8 +119,17 @@ case "$SCRIPT_DIR" in
 esac
 
 # ---------- install ----------
-chmod +x "$SOURCE_SCRIPT"
-mkdir -p "$INSTALL_DIR"
+# Copy devsync.sh into a separate data dir and make the COPY executable.
+# This ensures the git-tracked original is never modified, so 'git status'
+# stays clean on WSL (where core.filemode=true would otherwise detect the
+# chmod +x as a modification).
+mkdir -p "$DATA_DIR" "$INSTALL_DIR"
+
+cp "$SOURCE_SCRIPT" "$COPIED_SCRIPT"
+chmod +x "$COPIED_SCRIPT"
+
+# Record where the source repo lives so 'devsync update' can find it.
+echo "$SCRIPT_DIR" > "$REPO_MARKER"
 
 if [ -e "$LINK_PATH" ] && [ ! -L "$LINK_PATH" ]; then
     err "$LINK_PATH already exists and isn't a symlink devsync manages."
@@ -118,8 +137,8 @@ if [ -e "$LINK_PATH" ] && [ ! -L "$LINK_PATH" ]; then
     exit 1
 fi
 
-ln -sf "$SOURCE_SCRIPT" "$LINK_PATH"
-info "Linked $LINK_PATH -> $SOURCE_SCRIPT"
+ln -sf "$COPIED_SCRIPT" "$LINK_PATH"
+info "Installed $LINK_PATH -> $COPIED_SCRIPT"
 
 # ---------- PATH setup ----------
 if command -v devsync >/dev/null 2>&1 && [ "$(command -v devsync)" = "$LINK_PATH" ]; then
@@ -145,5 +164,5 @@ fi
 echo ""
 info "=== Install complete ==="
 note "Try: devsync help"
-note "To update later: just 'git pull' in this folder — the symlink stays current."
+note "To update later: devsync update"
 note "To uninstall: ./install.sh uninstall"

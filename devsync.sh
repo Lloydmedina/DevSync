@@ -144,7 +144,7 @@ detect_port() {
             fi
         fi
     done
-    # 3. Check Dockerfile for EXPOSE
+    # 3. Check Dockerfile is being EXPOSE
     local dockerfile
     dockerfile="$(find "$dir" -maxdepth 1 -name 'Dockerfile*' 2>/dev/null | head -1)"
     if [ -n "$dockerfile" ]; then
@@ -885,6 +885,47 @@ cmd_test() {
     esac
 }
 
+# ---------- update: git pull + reinstall ----------
+cmd_update() {
+    local data_dir="$HOME/.local/share/devsync"
+    local repo_marker="$data_dir/.source-repo"
+
+    if [ ! -f "$repo_marker" ]; then
+        err "Cannot determine source repo path."
+        err "Was devsync installed with install.sh? If not, re-run install.sh"
+        err "from your cloned devsync repo."
+        exit 1
+    fi
+
+    local repo_dir
+    repo_dir="$(cat "$repo_marker")"
+
+    if [ ! -d "$repo_dir" ]; then
+        err "Source repo not found at: $repo_dir"
+        err "It may have been moved or deleted. Re-clone and re-run install.sh."
+        exit 1
+    fi
+
+    if [ ! -d "$repo_dir/.git" ]; then
+        err "$repo_dir is not a git repository."
+        err "Cannot update. Re-clone the devsync repo and re-run install.sh."
+        exit 1
+    fi
+
+    note "=== devsync update ==="
+    echo ""
+    info "Pulling latest changes from $repo_dir..."
+    (cd "$repo_dir" && git pull)
+
+    echo ""
+    info "Reinstalling..."
+    bash "$repo_dir/install.sh"
+
+    echo ""
+    info "=== Update complete ==="
+    note "Run 'devsync version' to verify."
+}
+
 usage() {
     cat <<EOF
 devsync — Windows -> WSL sync + dev server runner (FastAPI / Django / Laravel / Yii2)
@@ -897,6 +938,7 @@ Usage:
   devsync stop                 Stop whatever is running on the configured port
   devsync status               Show whether the port is in use
   devsync test                 Run the project's test suite (pytest/phpunit)
+  devsync update               Pull latest from git and reinstall the tool
   devsync version              Show version
 
 Options:
@@ -913,6 +955,7 @@ case "$CMD" in
     stop)       check_dependencies; cmd_stop ;;
     status)     check_dependencies; cmd_status ;;
     test)       check_dependencies; cmd_test ;;
+    update)     cmd_update ;;
     ""|help|-h|--help) usage ;;
     version|--version) echo "devsync $VERSION" ;;
     *)

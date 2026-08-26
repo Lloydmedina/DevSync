@@ -36,11 +36,11 @@ devsync help       # verify installation
 
 The installer does three things:
 
-1. Symlinks `devsync.sh` into `~/.local/bin/devsync`.
-2. Adds `~/.local/bin` to your `PATH` in your shell rc file (`.bashrc` or `.zshrc`, auto-detected) if it is not already there.
-3. Makes `devsync.sh` executable.
+1. Copies `devsync.sh` into `~/.local/share/devsync/devsync.sh` and makes the copy executable. The git-tracked original in your repo is never modified, so `git status` stays clean on WSL.
+2. Symlinks `~/.local/bin/devsync` to that copy.
+3. Adds `~/.local/bin` to your `PATH` in your shell rc file (`.bashrc` or `.zshrc`, auto-detected) if it is not already there.
 
-Because the installation is a symlink, running `git pull` later updates the tool with no reinstall needed. The installer is idempotent and safe to re-run.
+The installer also records the path to your cloned repo in `~/.local/share/devsync/.source-repo` so that `devsync update` can find it later. The installer is idempotent and safe to re-run.
 
 ## Quick start / first project setup
 
@@ -76,6 +76,7 @@ This writes a `.devsync.conf` file into the destination folder. After that, ever
 | `devsync stop` | Kill whatever process is running on the configured port. |
 | `devsync status` | Show whether the configured port is in use, and by which process. |
 | `devsync test` | Run the project's test suite in the venv (pytest for Python, phpunit for PHP). |
+| `devsync update` | Pull the latest from git and reinstall the tool. |
 | `devsync help` | Show usage information. |
 | `devsync version` | Show the installed version. |
 
@@ -156,14 +157,13 @@ Set `VENV_PATH` to blank in `.devsync.conf` to skip venv entirely and use system
 
 ### Updating
 
-Because `install.sh` symlinks `devsync.sh` into your PATH, updating is just a git pull:
+To update devsync to the latest version, run:
 
 ```bash
-cd ~/devsync
-git pull
+devsync update
 ```
 
-The symlink stays current. No reinstall is needed.
+This runs `git pull` in your cloned repo and then re-runs `install.sh` to copy the updated `devsync.sh` into place. The git-tracked files in your repo are never modified by the install process, so `git status` stays clean.
 
 ### Uninstalling
 
@@ -172,7 +172,7 @@ cd ~/devsync
 ./install.sh uninstall
 ```
 
-This removes the symlink from `~/.local/bin/devsync`. PATH entries in your shell rc file are left in place (harmless if unused). The cloned repository itself is not deleted; remove it manually if desired:
+This removes the symlink from `~/.local/bin/devsync` and the copied files from `~/.local/share/devsync/`. PATH entries in your shell rc file are left in place (harmless if unused). The cloned repository itself is not deleted; remove it manually if desired:
 
 ```bash
 rm -rf ~/devsync
