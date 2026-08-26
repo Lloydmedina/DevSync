@@ -304,6 +304,7 @@ cmd_init() {
     APP_ENTRY=""
     PHP_DOCROOT=""
     DJANGO_MANAGE_PATH=""
+    LARAVEL_DEPS=""
 
     # Only prompt for settings relevant to what was chosen. With FRAMEWORK=auto
     # (either top-level "not sure" or a per-language "not sure"), fall back to
@@ -312,16 +313,18 @@ cmd_init() {
     ask_fastapi_settings=0
     ask_django_settings=0
     ask_php_settings=0
+    ask_laravel_deps=0
 
     case "$FRAMEWORK" in
         fastapi) ask_python_settings=1; ask_fastapi_settings=1 ;;
         django)  ask_python_settings=1; ask_django_settings=1 ;;
-        yii2|laravel) ask_php_settings=1 ;;
+        laravel) ask_php_settings=1; ask_laravel_deps=1 ;;
+        yii2)    ask_php_settings=1 ;;
         auto)
             case "$lang_choice" in
                 1) ask_python_settings=1; ask_fastapi_settings=1; ask_django_settings=1 ;;
-                2) ask_php_settings=1 ;;
-                *) ask_python_settings=1; ask_fastapi_settings=1; ask_django_settings=1; ask_php_settings=1 ;;
+                2) ask_php_settings=1; ask_laravel_deps=1 ;;
+                *) ask_python_settings=1; ask_fastapi_settings=1; ask_django_settings=1; ask_php_settings=1; ask_laravel_deps=1 ;;
             esac
             ;;
     esac
@@ -351,6 +354,18 @@ cmd_init() {
         read -rp "PHP webroot relative to DEST, blank = auto-detect (web/ or public/): " PHP_DOCROOT
     fi
 
+    if [ "$ask_laravel_deps" = "1" ]; then
+        echo ""
+        echo "Laravel dependency strategy:"
+        echo "  1) Run 'composer install' in WSL (recommended — builds vendor/ for the WSL platform)"
+        echo "  2) Copy vendor/ from the Windows source (use if composer install fails due to old/private packages)"
+        read -rp "Choose [1-2]: " deps_choice
+        case "$deps_choice" in
+            2) LARAVEL_DEPS="copy" ;;
+            *) LARAVEL_DEPS="composer" ;;
+        esac
+    fi
+
     CONFIG_PATH="$DEST/$DEFAULT_CONFIG_NAME"
     if [ -f "$CONFIG_PATH" ]; then
         warn "A .devsync.conf already exists at: $CONFIG_PATH"
@@ -374,6 +389,7 @@ DJANGO_MANAGE_PATH="$DJANGO_MANAGE_PATH"   # Django only, relative to DEST, blan
 
 # PHP (Laravel / Yii2) only
 PHP_DOCROOT="$PHP_DOCROOT" # relative to DEST, blank = auto-detect (web/ or public/)
+LARAVEL_DEPS="$LARAVEL_DEPS" # laravel only: composer (run composer install) | copy (sync vendor/ from source)
 
 # Extra rsync excludes, on top of framework defaults, e.g.:
 # EXTRA_EXCLUDES=("storage/app/*" "some-other-dir/")
@@ -406,6 +422,7 @@ load_config() {
     : "${APP_ENTRY:=}"
     : "${DJANGO_MANAGE_PATH:=manage.py}"
     : "${PHP_DOCROOT:=}"
+    : "${LARAVEL_DEPS:=composer}"
     EXTRA_EXCLUDES=("${EXTRA_EXCLUDES[@]+${EXTRA_EXCLUDES[@]}}")
     CONFIG_USED="$cfg"
     CONFIG_LOADED=1
@@ -472,7 +489,12 @@ framework_excludes() {
             common+=(--exclude="venv/" --exclude="__pycache__/" --exclude="*.pyc" --exclude=".pytest_cache/" --exclude="staticfiles/" --exclude="media/" --exclude="db.sqlite3")
             ;;
         laravel)
-            common+=(--exclude="vendor/" --exclude="storage/logs/" --exclude="storage/framework/cache/" --exclude="storage/framework/sessions/" --exclude="storage/framework/views/" --exclude="bootstrap/cache/" --exclude="database/*.sqlite" --exclude=".phpunit.cache/" --exclude="public/storage/" --exclude="public/build/" --exclude="public/hot" --exclude="storage/pail/" --exclude="storage/*.key")
+            # Only exclude vendor/ if we're running composer install in WSL.
+            # If LARAVEL_DEPS=copy, vendor/ is synced from the Windows source.
+            if [ "${LARAVEL_DEPS:-composer}" != "copy" ]; then
+                common+=(--exclude="vendor/")
+            fi
+            common+=(--exclude="storage/logs/" --exclude="storage/framework/cache/" --exclude="storage/framework/sessions/" --exclude="storage/framework/views/" --exclude="bootstrap/cache/" --exclude="database/*.sqlite" --exclude=".phpunit.cache/" --exclude="public/storage/" --exclude="public/build/" --exclude="public/hot" --exclude="storage/pail/" --exclude="storage/*.key")
             ;;
         yii2)
             common+=(--exclude="vendor/" --exclude="runtime/")
@@ -754,6 +776,44 @@ start_django() {
     exec python "$manage_path" runserver "0.0.0.0:$PORT"
 }
 
+# ---------- composer dependency management ----------
+ensure_composer_deps() {
+    cd "$DEST"
+
+    # If LARAVEL_DEPS=copy, vendor/ was synced from Windows — nothing to do.
+    if [ "${LARAVEL_DEPS:-composer}" = "copy" ]; then
+        if [ ! -d "vendor" ]; then
+            warn "LARAVEL_DEPS=copy but no vendor/ found in source. Did the sync include it?"
+            warn "Check that vendor/ exists on the Windows side, or set LARAVEL_DEPS=composer."
+        fi
+        return
+    fi
+
+    # LARAVEL_DEPS=composer — run composer install if needed.
+    if ! command -v composer >/dev/null 2>&1; then
+        err "composer is not installed in WSL but LARAVEL_DEPS=composer."
+        err "Install composer first: sudo apt install composer"
+        err "Or set LARAVEL_DEPS=copy in your .devsync.conf to sync vendor/ from Windows."
+        exit 1
+    fi
+
+    # Case 1: vendor/ doesn't exist at all — first install.
+    if [ ! -d "vendor" ]; then
+        info "vendor/ not found — running composer install..."
+        composer install
+        return
+    fi
+
+    # Case 2: vendor/ exists but composer.json changed since last install.
+    # Compare composer.json mtime against vendor/composer/installed.json.
+    if [ -f "composer.json" ] && [ -f "vendor/composer/installed.json" ]; then
+        if [ "composer.json" -nt "vendor/composer/installed.json" ]; then
+            info "composer.json changed since last install — running composer install..."
+            composer install
+        fi
+    fi
+}
+
 # ---------- start: laravel ----------
 start_laravel() {
     cd "$DEST"
@@ -761,6 +821,7 @@ start_laravel() {
         err "No 'artisan' file found in $DEST — is this a Laravel project?"
         exit 1
     fi
+    ensure_composer_deps
     info "Starting Laravel dev server on :$PORT"
     echo "  App: http://localhost:$PORT"
     exec php artisan serve --host 0.0.0.0 --port "$PORT"

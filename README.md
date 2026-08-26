@@ -105,6 +105,7 @@ The `.devsync.conf` file is a plain shell script that gets sourced by devsync. I
 | `APP_ENTRY` | FastAPI entry point in `module:app` format, e.g. `app.main:app`. If blank, devsync tries `app.main:app`, `main:app`, then `app:app`. |
 | `DJANGO_MANAGE_PATH` | Path to `manage.py`, relative to `DEST`. Default: `manage.py`. |
 | `PHP_DOCROOT` | Webroot directory for Yii2, relative to `DEST`. If blank, devsync auto-detects `web/` or `public/`. |
+| `LARAVEL_DEPS` | Laravel only: how to handle `vendor/` dependencies. `composer` (default) — run `composer install` in WSL when `vendor/` is missing or `composer.json` changed. `copy` — sync `vendor/` from the Windows source (use when `composer install` fails due to old or private packages). |
 | `EXTRA_EXCLUDES` | Bash array of additional rsync exclude patterns beyond the framework defaults. e.g. `EXTRA_EXCLUDES=("storage/app/*" "some-other-dir/")` |
 
 ### Files preserved during sync
@@ -117,7 +118,7 @@ Framework-specific excludes:
 
 - **FastAPI**: `venv/`, `__pycache__/`, `*.pyc`, `.pytest_cache/`
 - **Django**: `venv/`, `__pycache__/`, `*.pyc`, `.pytest_cache/`, `staticfiles/`, `media/`, `db.sqlite3`
-- **Laravel**: `vendor/`, `storage/logs/`, `storage/framework/cache/`, `storage/framework/sessions/`, `storage/framework/views/`, `bootstrap/cache/`, `database/*.sqlite`, `.phpunit.cache/`, `public/storage/`, `public/build/`, `public/hot`, `storage/pail/`, `storage/*.key`
+- **Laravel**: `vendor/` (only when `LARAVEL_DEPS=composer`; synced from source when `LARAVEL_DEPS=copy`), `storage/logs/`, `storage/framework/cache/`, `storage/framework/sessions/`, `storage/framework/views/`, `bootstrap/cache/`, `database/*.sqlite`, `.phpunit.cache/`, `public/storage/`, `public/build/`, `public/hot`, `storage/pail/`, `storage/*.key`
 - **Yii2**: `vendor/`, `runtime/`
 
 Additional excludes can be added via `EXTRA_EXCLUDES` in the config file.
@@ -143,6 +144,14 @@ For Python projects (FastAPI, Django), devsync automatically manages the virtual
 3. **Subsequent runs** — the venv already exists, so it just activates and starts the server.
 
 Set `VENV_PATH` to blank in `.devsync.conf` to skip venv entirely and use system Python.
+
+### Laravel dependency management
+
+For Laravel projects, devsync needs `vendor/` to be present in the WSL destination for the app to run. There are two strategies, chosen during `devsync init` and stored as `LARAVEL_DEPS` in `.devsync.conf`:
+
+1. **`composer`** (default) — `vendor/` is excluded from sync. On `devsync run`, if `vendor/` is missing or `composer.json` has changed since the last install, devsync runs `composer install` in WSL. This builds `vendor/` for the WSL platform, which is the recommended approach. Requires `composer` to be installed in WSL (`sudo apt install composer`).
+
+2. **`copy`** — `vendor/` is synced from the Windows source along with everything else. No `composer install` is run. Use this when `composer install` fails (e.g. packages that are too old, private, or require a PHP version not available in WSL). Note that `vendor/bin/` executables may have Windows line endings or lack the executable bit — run `php vendor/bin/pest` instead of `./vendor/bin/pest` if you encounter issues.
 
 ## Supported frameworks
 
