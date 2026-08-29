@@ -17,6 +17,7 @@ Both WSL and Docker ultimately run on a Linux kernel. Docker Desktop adds a cont
 - **Python** installed inside WSL, if using FastAPI or Django
 - **python3-venv** installed inside WSL (`sudo apt install python3-venv`) — auto-installed by devsync if missing
 - **PHP** installed inside WSL, if using Laravel or Yii2
+- **Node.js** installed inside WSL, if using Nuxt or generic Node (`curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash - && sudo apt install -y nodejs`)
 - For FastAPI: **uvicorn** listed in your `requirements.txt` (devsync installs it into the venv automatically)
 - For Django: a `manage.py` in the project root (or a path you configure)
 - For AWS-dependent projects: **moto** is auto-installed into the venv if your project references `localhost:4566` in `.env` or `.env.example`
@@ -55,8 +56,8 @@ The interactive setup will:
 
 - **Ask for Windows source path** — e.g. `/mnt/c/Users/you/project` or `V:\project` (Windows paths are auto-converted to `/mnt/v/...`)
 - **Auto-detect WSL destination** — uses the current directory as the destination
-- **Ask for language** — Python, PHP, or "not sure" (auto-detect)
-- **Ask for framework** — narrowed to the chosen language (FastAPI/Django for Python, Laravel/Yii2 for PHP), or auto-detect
+- **Ask for language** — Python, PHP, Node.js, or "not sure" (auto-detect)
+- **Ask for framework** — narrowed to the chosen language (FastAPI/Django for Python, Laravel/Yii2 for PHP, Nuxt/generic Node for Node.js), or auto-detect
 - **Auto-detect port** — scans `docker-compose*.yml`, `.env` files, and `Dockerfile` `EXPOSE` directives for port mappings (e.g. `4000:4000` or `EXPOSE 8000`). Press Enter to accept or type a different port.
 - **Auto-detect venv** — checks for existing `venv/` or `.venv/` in the destination. If none exists, one is created on first `run`.
 - **Ask for framework-specific settings** — FastAPI entry point (e.g. `app.main:app`), Django `manage.py` path, or PHP webroot
@@ -99,13 +100,14 @@ The `.devsync.conf` file is a plain shell script that gets sourced by devsync. I
 |---|---|
 | `SOURCE` | Windows-mounted source path, e.g. `/mnt/c/Users/you/project`. This is where your git-tracked code lives. |
 | `DEST` | WSL destination path where files are synced to and the dev server runs. |
-| `FRAMEWORK` | `auto`, `fastapi`, `django`, `laravel`, or `yii2`. When set to `auto`, devsync detects the framework by checking for marker files (`artisan` for Laravel, `yii` for Yii2, `manage.py` for Django, `fastapi` in `requirements.txt` or `pyproject.toml` for FastAPI). |
+| `FRAMEWORK` | `auto`, `fastapi`, `django`, `laravel`, `yii2`, `nuxt`, or `node`. When set to `auto`, devsync detects the framework by checking for marker files (`artisan` for Laravel, `yii` for Yii2, `manage.py` for Django, `fastapi` in `requirements.txt` or `pyproject.toml` for FastAPI, `nuxt.config.ts`/`nuxt.config.js` for Nuxt, `package.json` for generic Node). |
 | `PORT` | Port the dev server binds to. Auto-detected from `docker-compose*.yml`, `.env` files, or `Dockerfile` `EXPOSE` directive during `init`. Default: `8000`. |
 | `VENV_PATH` | Path to a Python virtual environment, relative to `DEST`. Auto-detected during `init` (`venv/` or `.venv/`). If no venv exists, one is created automatically on first `run`/`run-only` and dependencies are installed from `requirements.txt` or `pyproject.toml`. Set blank to skip venv entirely. |
 | `APP_ENTRY` | FastAPI entry point in `module:app` format, e.g. `app.main:app`. If blank, devsync tries `app.main:app`, `main:app`, then `app:app`. |
 | `DJANGO_MANAGE_PATH` | Path to `manage.py`, relative to `DEST`. Default: `manage.py`. |
 | `PHP_DOCROOT` | Webroot directory for Yii2, relative to `DEST`. If blank, devsync auto-detects `web/` or `public/`. |
 | `LARAVEL_DEPS` | Laravel only: how to handle `vendor/` dependencies. `composer` (default) — run `composer install` in WSL when `vendor/` is missing or `composer.json` changed. `copy` — sync `vendor/` from the Windows source (use when `composer install` fails due to old or private packages). |
+| `NODE_SCRIPT` | Node.js only: npm script name to run for the dev server. If blank, devsync auto-detects (`dev` then `start` from package.json scripts). Nuxt always uses `npm run dev -- --host 0.0.0.0 --port <port>`. |
 | `EXTRA_EXCLUDES` | Bash array of additional rsync exclude patterns beyond the framework defaults. e.g. `EXTRA_EXCLUDES=("storage/app/*" "some-other-dir/")` |
 
 ### Files preserved during sync
@@ -120,6 +122,7 @@ Framework-specific excludes:
 - **Django**: `venv/`, `__pycache__/`, `*.pyc`, `.pytest_cache/`, `staticfiles/`, `media/`, `db.sqlite3`
 - **Laravel**: `vendor/` (only when `LARAVEL_DEPS=composer`; synced from source when `LARAVEL_DEPS=copy`), `storage/logs/`, `storage/framework/cache/`, `storage/framework/sessions/`, `storage/framework/views/`, `bootstrap/cache/`, `database/*.sqlite`, `.phpunit.cache/`, `public/storage/`, `public/build/`, `public/hot`, `storage/pail/`, `storage/*.key`
 - **Yii2**: `vendor/`, `runtime/`
+- **Nuxt / Node**: `.nuxt/`, `.output/`, `dist/`, `.nitro/`, `.cache/` (node_modules/ is always excluded globally)
 
 Additional excludes can be added via `EXTRA_EXCLUDES` in the config file.
 
@@ -161,6 +164,8 @@ For Laravel projects, devsync needs `vendor/` to be present in the WSL destinati
 | Python | Django | `python manage.py runserver 0.0.0.0:<port>` |
 | PHP | Laravel | `php artisan serve --host 0.0.0.0 --port <port>` |
 | PHP | Yii2 | `php -S 0.0.0.0:<port> -t <docroot>` |
+| Node.js | Nuxt 3 | `npm run dev -- --host 0.0.0.0 --port <port>` |
+| Node.js | Generic Node | `HOST=0.0.0.0 PORT=<port> npm run <script>` (auto-detects `dev` then `start`) |
 
 ## Updating and uninstalling
 
@@ -236,8 +241,10 @@ Auto-detection checks for the following marker files in the destination folder f
 - `yii` — Yii2
 - `manage.py` — Django
 - `fastapi` in `requirements.txt` or `pyproject.toml` — FastAPI
+- `nuxt.config.ts` or `nuxt.config.js` — Nuxt
+- `package.json` — Generic Node (only if no Nuxt config is present)
 
-If detection fails, set `FRAMEWORK` explicitly in `.devsync.conf` to one of `fastapi`, `django`, `laravel`, or `yii2`. You can also re-run `devsync init` and choose the framework manually instead of relying on auto-detect.
+If detection fails, set `FRAMEWORK` explicitly in `.devsync.conf` to one of `fastapi`, `django`, `laravel`, `yii2`, `nuxt`, or `node`. You can also re-run `devsync init` and choose the framework manually instead of relying on auto-detect.
 
 ### Python version mismatch
 
@@ -260,6 +267,17 @@ Some features may not work. Consider installing PHP 8.2 in WSL.
 ```
 
 This is a warning only — the sync and server startup proceed regardless. To fix it, install the required PHP version in WSL (e.g. `sudo apt install php8.2-cli php8.2-mbstring php8.2-xml php8.2-sqlite3`).
+
+### Node version mismatch
+
+After sync, devsync checks the project's `Dockerfile*` for the Node version (e.g. `FROM node:20`) and compares it to the WSL Node version. If WSL has an older version, a warning is shown:
+
+```
+Node version mismatch: project requires 20, WSL has 18.
+Some features may not work. Consider installing Node 20 in WSL.
+```
+
+This is a warning only — the sync and server startup proceed regardless. To fix it, install the required Node version in WSL (e.g. `curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash - && sudo apt install -y nodejs`).
 
 ### rsync permission errors on localstack directory
 

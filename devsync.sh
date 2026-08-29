@@ -11,6 +11,8 @@
 #   - Python: Django  (via manage.py runserver)
 #   - PHP:    Laravel (via `php artisan serve`)
 #   - PHP:    Yii2     (via PHP's built-in server against the webroot)
+#   - Node:   Nuxt 3  (via `npm run dev`)
+#   - Node:   Generic (via `npm run dev` or `npm start`)
 #
 # Usage:
 #   devsync init              # interactive setup, writes .devsync.conf in $DEST
@@ -234,6 +236,38 @@ check_php_version() {
     fi
 }
 
+# ---------- node version check ----------
+check_node_version() {
+    local dir="$1"
+    local dockerfile
+    dockerfile="$(find "$dir" -maxdepth 1 -name 'Dockerfile*' 2>/dev/null | head -1)"
+    if [ -z "$dockerfile" ]; then
+        return
+    fi
+    local required_major required_minor
+    required_major="$(grep -oP '^FROM node:\K(\d+)' "$dockerfile" 2>/dev/null | head -1 || true)"
+    required_minor="$(grep -oP '^FROM node:\d+\.\K(\d+)' "$dockerfile" 2>/dev/null | head -1 || true)"
+    if [ -z "$required_major" ]; then
+        return
+    fi
+    if ! command -v node >/dev/null 2>&1; then
+        warn "Node.js is not installed in WSL but the project requires Node ${required_major}.${required_minor:-0}."
+        warn "Install Node with: curl -fsSL https://deb.nodesource.com/setup_${required_major}.x | sudo -E bash - && sudo apt install -y nodejs"
+        return
+    fi
+    local actual_major actual_minor
+    actual_major="$(node -e 'console.log(process.versions.node.split(".")[0])' 2>/dev/null || echo "0")"
+    actual_minor="$(node -e 'console.log(process.versions.node.split(".")[1])' 2>/dev/null || echo "0")"
+    if [ "$actual_major" -lt "$required_major" ] 2>/dev/null || \
+       { [ "$actual_major" -eq "$required_major" ] 2>/dev/null && [ -n "$required_minor" ] && [ "$actual_minor" -lt "$required_minor" ] 2>/dev/null; }; then
+        local required_ver="${required_major}"
+        [ -n "$required_minor" ] && required_ver="${required_major}.${required_minor}"
+        local actual_ver="${actual_major}.${actual_minor}"
+        warn "Node version mismatch: project requires ${required_ver}, WSL has ${actual_ver}."
+        warn "Some features may not work. Consider installing Node ${required_ver} in WSL."
+    fi
+}
+
 # ---------- init: interactive setup ----------
 cmd_init() {
     note "=== devsync setup ==="
@@ -259,8 +293,9 @@ cmd_init() {
     echo "Language:"
     echo "  1) Python"
     echo "  2) PHP"
-    echo "  3) Not sure — auto-detect everything"
-    read -rp "Choose [1-3]: " lang_choice
+    echo "  3) Node.js"
+    echo "  4) Not sure — auto-detect everything"
+    read -rp "Choose [1-4]: " lang_choice
 
     FRAMEWORK="auto"
     case "$lang_choice" in
@@ -290,6 +325,19 @@ cmd_init() {
                 *) FRAMEWORK="auto" ;;
             esac
             ;;
+        3)
+            echo ""
+            echo "Node.js framework:"
+            echo "  1) Nuxt 3"
+            echo "  2) Generic Node (npm run dev / npm start)"
+            echo "  3) Not sure — auto-detect"
+            read -rp "Choose [1-3]: " fw_choice
+            case "$fw_choice" in
+                1) FRAMEWORK="nuxt" ;;
+                2) FRAMEWORK="node" ;;
+                *) FRAMEWORK="auto" ;;
+            esac
+            ;;
         *)
             FRAMEWORK="auto"
             ;;
@@ -305,6 +353,7 @@ cmd_init() {
     PHP_DOCROOT=""
     DJANGO_MANAGE_PATH=""
     LARAVEL_DEPS=""
+    NODE_SCRIPT=""
 
     # Only prompt for settings relevant to what was chosen. With FRAMEWORK=auto
     # (either top-level "not sure" or a per-language "not sure"), fall back to
@@ -314,17 +363,21 @@ cmd_init() {
     ask_django_settings=0
     ask_php_settings=0
     ask_laravel_deps=0
+    ask_node_settings=0
 
     case "$FRAMEWORK" in
         fastapi) ask_python_settings=1; ask_fastapi_settings=1 ;;
         django)  ask_python_settings=1; ask_django_settings=1 ;;
         laravel) ask_php_settings=1; ask_laravel_deps=1 ;;
         yii2)    ask_php_settings=1 ;;
+        nuxt)    ask_node_settings=1 ;;
+        node)    ask_node_settings=1 ;;
         auto)
             case "$lang_choice" in
                 1) ask_python_settings=1; ask_fastapi_settings=1; ask_django_settings=1 ;;
                 2) ask_php_settings=1; ask_laravel_deps=1 ;;
-                *) ask_python_settings=1; ask_fastapi_settings=1; ask_django_settings=1; ask_php_settings=1; ask_laravel_deps=1 ;;
+                3) ask_node_settings=1 ;;
+                *) ask_python_settings=1; ask_fastapi_settings=1; ask_django_settings=1; ask_php_settings=1; ask_laravel_deps=1; ask_node_settings=1 ;;
             esac
             ;;
     esac
@@ -366,6 +419,10 @@ cmd_init() {
         esac
     fi
 
+    if [ "$ask_node_settings" = "1" ]; then
+        read -rp "Dev script from package.json (blank = auto-detect: 'dev' then 'start'): " NODE_SCRIPT
+    fi
+
     CONFIG_PATH="$DEST/$DEFAULT_CONFIG_NAME"
     if [ -f "$CONFIG_PATH" ]; then
         warn "A .devsync.conf already exists at: $CONFIG_PATH"
@@ -379,7 +436,7 @@ cmd_init() {
 # devsync config — generated by 'devsync init'
 SOURCE="$SOURCE"
 DEST="$DEST"
-FRAMEWORK="$FRAMEWORK"     # auto | fastapi | django | laravel | yii2
+FRAMEWORK="$FRAMEWORK"     # auto | fastapi | django | laravel | yii2 | nuxt | node
 PORT="$PORT"
 
 # Python (FastAPI / Django) only
@@ -390,6 +447,9 @@ DJANGO_MANAGE_PATH="$DJANGO_MANAGE_PATH"   # Django only, relative to DEST, blan
 # PHP (Laravel / Yii2) only
 PHP_DOCROOT="$PHP_DOCROOT" # relative to DEST, blank = auto-detect (web/ or public/)
 LARAVEL_DEPS="$LARAVEL_DEPS" # laravel only: composer (run composer install) | copy (sync vendor/ from source)
+
+# Node.js (Nuxt / generic Node) only
+NODE_SCRIPT="$NODE_SCRIPT"   # npm script name to run, blank = auto-detect ('dev' then 'start')
 
 # Extra rsync excludes, on top of framework defaults, e.g.:
 # EXTRA_EXCLUDES=("storage/app/*" "some-other-dir/")
@@ -423,6 +483,7 @@ load_config() {
     : "${DJANGO_MANAGE_PATH:=manage.py}"
     : "${PHP_DOCROOT:=}"
     : "${LARAVEL_DEPS:=composer}"
+    : "${NODE_SCRIPT:=}"
     EXTRA_EXCLUDES=("${EXTRA_EXCLUDES[@]+${EXTRA_EXCLUDES[@]}}")
     CONFIG_USED="$cfg"
     CONFIG_LOADED=1
@@ -443,6 +504,10 @@ detect_framework_in() {
         echo "fastapi"
     elif [ -f "$dir/pyproject.toml" ] && grep -qi fastapi "$dir/pyproject.toml" 2>/dev/null; then
         echo "fastapi"
+    elif [ -f "$dir/nuxt.config.ts" ] || [ -f "$dir/nuxt.config.js" ]; then
+        echo "nuxt"
+    elif [ -f "$dir/package.json" ]; then
+        echo "node"
     else
         echo "unknown"
     fi
@@ -499,6 +564,9 @@ framework_excludes() {
         yii2)
             common+=(--exclude="vendor/" --exclude="runtime/")
             ;;
+        nuxt|node)
+            common+=(--exclude=".nuxt/" --exclude=".output/" --exclude="dist/" --exclude=".nitro/" --exclude=".cache/")
+            ;;
     esac
     printf '%s\n' "${common[@]}"
 }
@@ -510,7 +578,7 @@ do_sync() {
     local fw
     if ! fw="$(resolve_framework)"; then
         err "Could not auto-detect framework (checked $DEST and $SOURCE)."
-        err "Set FRAMEWORK explicitly in your .devsync.conf (fastapi | django | laravel | yii2)."
+        err "Set FRAMEWORK explicitly in your .devsync.conf (fastapi | django | laravel | yii2 | nuxt | node)."
         exit 1
     fi
     RESOLVED_FW="$fw"
@@ -572,6 +640,9 @@ do_sync() {
     fi
     if [ "$fw" = "laravel" ] || [ "$fw" = "yii2" ]; then
         check_php_version "$DEST"
+    fi
+    if [ "$fw" = "nuxt" ] || [ "$fw" = "node" ]; then
+        check_node_version "$DEST"
     fi
 }
 
@@ -857,6 +928,80 @@ start_yii2() {
     exec php -S 0.0.0.0:"$PORT" -t "$docroot"
 }
 
+# ---------- node dependency management ----------
+ensure_node_deps() {
+    cd "$DEST"
+
+    if ! command -v node >/dev/null 2>&1; then
+        err "Node.js is not installed in WSL."
+        err "Install it with: curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash - && sudo apt install -y nodejs"
+        exit 1
+    fi
+    if ! command -v npm >/dev/null 2>&1; then
+        err "npm is not installed in WSL (should come with Node.js)."
+        err "Reinstall Node.js: curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash - && sudo apt install -y nodejs"
+        exit 1
+    fi
+
+    # Case 1: node_modules/ doesn't exist — first install.
+    if [ ! -d "node_modules" ]; then
+        info "node_modules/ not found — running npm install..."
+        npm install
+        return
+    fi
+
+    # Case 2: node_modules/ exists but package.json changed since last install.
+    # Compare package.json mtime against node_modules/.package-lock.json.
+    if [ -f "package.json" ] && [ -f "node_modules/.package-lock.json" ]; then
+        if [ "package.json" -nt "node_modules/.package-lock.json" ]; then
+            info "package.json changed since last install — running npm install..."
+            npm install
+        fi
+    fi
+}
+
+# ---------- start: nuxt ----------
+start_nuxt() {
+    cd "$DEST"
+    if [ ! -f "nuxt.config.ts" ] && [ ! -f "nuxt.config.js" ]; then
+        err "No nuxt.config.ts or nuxt.config.js found in $DEST — is this a Nuxt project?"
+        exit 1
+    fi
+    ensure_node_deps
+    info "Starting Nuxt dev server on :$PORT"
+    echo "  App: http://localhost:$PORT"
+    exec npm run dev -- --host 0.0.0.0 --port "$PORT"
+}
+
+# ---------- start: generic node ----------
+start_node() {
+    cd "$DEST"
+    if [ ! -f "package.json" ]; then
+        err "No package.json found in $DEST — is this a Node.js project?"
+        exit 1
+    fi
+    ensure_node_deps
+
+    # Resolve which npm script to run: explicit config > "dev" > "start".
+    local script="$NODE_SCRIPT"
+    if [ -z "$script" ]; then
+        if node -e 'const s=require("./package.json").scripts||{};process.exit(s.dev?0:1)' 2>/dev/null; then
+            script="dev"
+        elif node -e 'const s=require("./package.json").scripts||{};process.exit(s.start?0:1)' 2>/dev/null; then
+            script="start"
+        else
+            err "No 'dev' or 'start' script found in package.json."
+            err "Set NODE_SCRIPT in your .devsync.conf to the script name to run."
+            exit 1
+        fi
+    fi
+
+    info "Starting Node dev server (npm run $script) on :$PORT"
+    echo "  App: http://localhost:$PORT"
+    # Pass host/port via env — most Node servers respect HOST/PORT.
+    exec env HOST=0.0.0.0 PORT="$PORT" npm run "$script"
+}
+
 start_app() {
     load_config
     SOURCE="$(normalize_windows_path "$SOURCE")"
@@ -866,7 +1011,7 @@ start_app() {
     else
         if ! fw="$(resolve_framework)"; then
             err "Could not auto-detect framework (checked $DEST and $SOURCE)."
-            err "Set FRAMEWORK explicitly in your .devsync.conf (fastapi | django | laravel | yii2)."
+            err "Set FRAMEWORK explicitly in your .devsync.conf (fastapi | django | laravel | yii2 | nuxt | node)."
             exit 1
         fi
         RESOLVED_FW="$fw"
@@ -885,6 +1030,8 @@ start_app() {
         django)  start_django ;;
         laravel) start_laravel ;;
         yii2)    start_yii2 ;;
+        nuxt)    start_nuxt ;;
+        node)    start_node ;;
         *)
             err "Unsupported framework: $fw"
             exit 1
@@ -950,6 +1097,17 @@ cmd_test() {
                 exec phpunit
             fi
             ;;
+        nuxt|node)
+            ensure_node_deps
+            if ! node -e 'const s=require("./package.json").scripts||{};process.exit(s.test?0:1)' 2>/dev/null; then
+                err "No 'test' script found in package.json."
+                err "Add one to package.json, e.g. \"test\": \"vitest\" or \"test\": \"jest\""
+                exit 1
+            fi
+            info "Running npm test..."
+            echo ""
+            exec npm test
+            ;;
         *)
             err "Unsupported framework for testing: $fw"
             exit 1
@@ -1000,7 +1158,7 @@ cmd_update() {
 
 usage() {
     cat <<EOF
-devsync — Windows -> WSL sync + dev server runner (FastAPI / Django / Laravel / Yii2)
+devsync — Windows -> WSL sync + dev server runner (FastAPI / Django / Laravel / Yii2 / Nuxt / Node)
 
 Usage:
   devsync init                 Interactive setup, writes .devsync.conf
